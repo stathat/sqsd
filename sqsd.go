@@ -241,15 +241,15 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Hello, %q", html.EscapeString(r.URL.Path))
 }
 
-func main() {
-	log.Printf("sqs memory server starting")
-	flag.Parse()
-
+func run(qlist string) {
 	queues = make(map[string]*queue)
 
-	cqnames := strings.Split(*cqueues, ",")
+	cqnames := strings.Split(qlist, ",")
 	queuesMu.Lock()
 	for _, name := range cqnames {
+		if len(name) == 0 {
+			continue
+		}
 		log.Printf("creating queue %q", name)
 		q := newQueue(name)
 		queues[name] = q
@@ -259,4 +259,10 @@ func main() {
 	http.HandleFunc("/", handler)
 
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *port), nil))
+}
+
+func main() {
+	log.Printf("sqs memory server starting")
+	flag.Parse()
+	run(*cqueues)
 }
