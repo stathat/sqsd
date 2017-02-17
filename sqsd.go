@@ -1,11 +1,11 @@
 package main
 
 import (
+	"crypto/md5"
 	"crypto/rand"
 	"encoding/hex"
 	"flag"
 	"fmt"
-	"html"
 	"log"
 	"net/http"
 	"path"
@@ -15,6 +15,7 @@ import (
 	"time"
 )
 
+var host = flag.String("host", "localhost", "hostname")
 var port = flag.Int("port", 9324, "port")
 var cqueues = flag.String("queues", "", "queues to create on startup, comma-separated")
 
@@ -24,7 +25,8 @@ type msg struct {
 }
 
 func (m *msg) XML() string {
-	return fmt.Sprintf("<Message><MessageId>5fea7756-0ea4-451a-a703-a558b933e274</MessageId><ReceiptHandle>%s</ReceiptHandle><MD5OfBody></MD5OfBody><Body>%s</Body></Message>", m.handles[0], m.body)
+	hash := md5.Sum([]byte(m.body))
+	return fmt.Sprintf("<Message><MessageId>5fea7756-0ea4-451a-a703-a558b933e274</MessageId><ReceiptHandle>%s</ReceiptHandle><MD5OfBody>%x</MD5OfBody><Body>%s</Body></Message>", m.handles[0], hash, m.body)
 }
 
 func (m *msg) AddHandle() string {
@@ -53,7 +55,7 @@ func newQueue(name string) *queue {
 }
 
 func (q *queue) URL() string {
-	return fmt.Sprintf("http://localhost:%d/123/%s", *port, q.name)
+	return fmt.Sprintf("http://%s:%d/123/%s", *host, *port, q.name)
 }
 
 func (q *queue) Front() *msg {
@@ -123,11 +125,23 @@ func createQueue(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "<CreateQueueResponse> <CreateQueueResult> <QueueUrl>%s</QueueUrl> </CreateQueueResult> <ResponseMetadata> <RequestId> 7a62c49f-347e-4fc4-9331-6e8e7a96aa73 </RequestId> </ResponseMetadata> </CreateQueueResponse>", q.URL())
 }
 
-func receiveMessage(w http.ResponseWriter, r *http.Request) {
-	qname := path.Base(r.URL.Path)
+func findQueue(r *http.Request) (*queue, string, bool) {
+	var name string
+	if r.Method == "GET" {
+		name = path.Base(r.URL.Path)
+	} else {
+		qurl := r.FormValue("QueueUrl")
+		name = path.Base(qurl)
+	}
 	queuesMu.Lock()
-	q, ok := queues[qname]
+	q, ok := queues[name]
 	queuesMu.Unlock()
+
+	return q, name, ok
+}
+
+func receiveMessage(w http.ResponseWriter, r *http.Request) {
+	q, qname, ok := findQueue(r)
 	if !ok {
 		log.Printf("no queue %q", qname)
 		return
@@ -157,11 +171,7 @@ func receiveMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func deleteMessage(w http.ResponseWriter, r *http.Request) {
-	qname := path.Base(r.URL.Path)
-	log.Printf("DeleteMessage -> %q", qname)
-	queuesMu.Lock()
-	q, ok := queues[qname]
-	queuesMu.Unlock()
+	q, qname, ok := findQueue(r)
 	if !ok {
 		log.Printf("no queue %q", qname)
 		return
@@ -187,22 +197,57 @@ func deleteMessage(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "400 invalid receipt handle", http.StatusBadRequest)
 }
 
+func deleteMessageBatch(w http.ResponseWriter, r *http.Request) {
+	q, qname, ok := findQueue(r)
+	if !ok {
+		log.Printf("no queue %q", qname)
+		return
+		_ = q
+	}
+
+	i := 1
+	for {
+		rh := r.FormValue(fmt.Sprintf("DeleteMessageBatchRequestEntry.%d.ReceiptHandle", i))
+		if rh == "" {
+			break
+		}
+
+		found := false
+		for m := range q.delivered {
+			for _, h := range m.handles {
+				if h == rh {
+					found = true
+					break
+				}
+			}
+			if found {
+				break
+			}
+			q.delivered <- m
+		}
+		if !found {
+			http.Error(w, "400 invalid receipt handle", http.StatusBadRequest)
+			return
+		}
+
+		i++
+	}
+
+	fmt.Fprintf(w, "<DeleteMessageBatchResponse><ResponseMetadata><RequestId>b5293cb5-d306-4a17-9048-b263635abe42</RequestId></ResponseMetadata></DeleteMessageBatchResponse>")
+}
+
 func sendMessage(w http.ResponseWriter, r *http.Request) {
-	qname := path.Base(r.URL.Path)
-	log.Printf("SendMessage -> %q", qname)
-	queuesMu.Lock()
-	defer queuesMu.Unlock()
-	q, ok := queues[qname]
+	q, qname, ok := findQueue(r)
 	if !ok {
 		log.Printf("no queue %q", qname)
 		return
 	}
-	q.msgs <- &msg{body: r.FormValue("MessageBody")}
+	body := r.FormValue("MessageBody")
+	q.msgs <- &msg{body: body}
+	hash := md5.Sum([]byte(body))
 	fmt.Fprintf(w, `<SendMessageResponse>
     <SendMessageResult>
-        <MD5OfMessageBody>
-            fafb00f5732ab283681e124bf8747ed1
-        </MD5OfMessageBody>
+        <MD5OfMessageBody>%x</MD5OfMessageBody>
         <MD5OfMessageAttributes>
 	    3ae8f24a165a8cedc005670c81a27295
         </MD5OfMessageAttributes>
@@ -215,7 +260,7 @@ func sendMessage(w http.ResponseWriter, r *http.Request) {
             27daac76-34dd-47df-bd01-1f6e873584a0
         </RequestId>
     </ResponseMetadata>
-</SendMessageResponse>`)
+</SendMessageResponse>`, hash)
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
@@ -231,18 +276,24 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		receiveMessage(w, r)
 	case "DeleteMessage":
 		deleteMessage(w, r)
+	case "DeleteMessageBatch":
+		deleteMessageBatch(w, r)
 	case "SendMessage":
 		sendMessage(w, r)
 	default:
 		log.Printf("unknown action: %q", a)
 		log.Printf("request: %+v", r)
 	}
+}
 
-	fmt.Fprintf(w, "Hello, %q", html.EscapeString(r.URL.Path))
+func reset() {
+	queuesMu.Lock()
+	queues = make(map[string]*queue)
+	queuesMu.Unlock()
 }
 
 func run(qlist string) {
-	queues = make(map[string]*queue)
+	reset()
 
 	cqnames := strings.Split(qlist, ",")
 	queuesMu.Lock()

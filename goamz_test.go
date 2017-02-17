@@ -10,8 +10,7 @@ import (
 )
 
 func TestGoamzSQS(t *testing.T) {
-	*port = 19324
-	go run("")
+	Setup()
 
 	r := aws.Region{SQSEndpoint: fmt.Sprintf("http://localhost:%d", *port)}
 	s := sqs.New(aws.Auth{AccessKey: "x", SecretKey: "x"}, r)
