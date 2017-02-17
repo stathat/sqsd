@@ -20,8 +20,9 @@ It handles these SQS operations:
     CreateQueue
     ReceiveMessage
     DeleteMessage
+    DeleteMessageBatch
     SendMessage
 
 Pretty much the only parameter supported is `WaitTimeSeconds` for `ReceiveMessage`.  
 
-Tested with the goamz/sqs package as a client.
+Tested with the goamz/sqs and aws-sdk-go packages.
