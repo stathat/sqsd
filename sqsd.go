@@ -18,6 +18,7 @@ import (
 var host = flag.String("host", "localhost", "hostname")
 var port = flag.Int("port", 9324, "port")
 var cqueues = flag.String("queues", "", "queues to create on startup, comma-separated")
+var delay = flag.Duration("delay", 0, "delay for each message")
 
 type msg struct {
 	body    string
@@ -243,7 +244,14 @@ func sendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body := r.FormValue("MessageBody")
-	q.msgs <- &msg{body: body}
+	if *delay > 0 {
+		go func() {
+			time.Sleep(*delay)
+			q.msgs <- &msg{body: body}
+		}()
+	} else {
+		q.msgs <- &msg{body: body}
+	}
 	hash := md5.Sum([]byte(body))
 	fmt.Fprintf(w, `<SendMessageResponse>
     <SendMessageResult>
