@@ -244,7 +244,6 @@ func sendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body := r.FormValue("MessageBody")
-	log.Printf("SendMessage => [%s] (%s)", qname, body)
 	if *delay > 0 {
 		go func() {
 			log.Printf("SendMessage [%s] <= (%s) delay %s", qname, body, *delay)
