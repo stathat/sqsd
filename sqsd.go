@@ -91,7 +91,6 @@ var queues map[string]*queue
 var queuesMu sync.Mutex
 
 func getQueueURL(w http.ResponseWriter, r *http.Request) {
-	log.Printf("GetQueueUrl")
 	name := r.FormValue("QueueName")
 	var url string
 	queuesMu.Lock()
@@ -100,6 +99,7 @@ func getQueueURL(w http.ResponseWriter, r *http.Request) {
 		url = q.URL()
 	}
 	queuesMu.Unlock()
+	log.Printf("GetQueueUrl [%s] -> %s", name, url)
 
 	fmt.Fprintf(w, "<GetQueueUrlResponse><GetQueueUrlResult><QueueUrl>%s</QueueUrl></GetQueueUrlResult><ResponseMetadata><RequestId>470a6f13-2ed9-4181-ad8a-2fdea142988e</RequestId></ResponseMetadata></GetQueueUrlResponse>", url)
 }
@@ -116,8 +116,8 @@ func listQueues(w http.ResponseWriter, r *http.Request) {
 }
 
 func createQueue(w http.ResponseWriter, r *http.Request) {
-	log.Printf("CreateQueue")
 	name := r.FormValue("QueueName")
+	log.Printf("CreateQueue [%s]", name)
 	q := newQueue(name)
 	queuesMu.Lock()
 	queues[name] = q
@@ -165,7 +165,7 @@ func receiveMessage(w http.ResponseWriter, r *http.Request) {
 		m = q.FrontWait(secs)
 	}
 	if m != nil {
-		log.Printf("ReceiveMessage -> %q returning message", qname)
+		log.Printf("ReceiveMessage [%s] => (%s)", qname, m.body)
 		fmt.Fprintf(w, m.XML())
 	}
 	fmt.Fprintf(w, "</ReceiveMessageResult><ResponseMetadata><RequestId>b6633655-283d-45b4-aee4-4e84e0ae6afa</RequestId></ResponseMetadata></ReceiveMessageResponse>")
@@ -244,31 +244,21 @@ func sendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body := r.FormValue("MessageBody")
+	log.Printf("SendMessage => [%s] (%s)", qname, body)
 	if *delay > 0 {
 		go func() {
+			log.Printf("SendMessage [%s] <= (%s) delay %s", qname, body, *delay)
 			time.Sleep(*delay)
 			q.msgs <- &msg{body: body}
+			log.Printf("SendMessage [%s] <= (%s) sent", qname, body)
 		}()
 	} else {
+		log.Printf("SendMessage [%s] <= (%s)", qname, body)
 		q.msgs <- &msg{body: body}
+		log.Printf("SendMessage [%s] <= (%s) sent", qname, body)
 	}
 	hash := md5.Sum([]byte(body))
-	fmt.Fprintf(w, `<SendMessageResponse>
-    <SendMessageResult>
-        <MD5OfMessageBody>%x</MD5OfMessageBody>
-        <MD5OfMessageAttributes>
-	    3ae8f24a165a8cedc005670c81a27295
-        </MD5OfMessageAttributes>
-        <MessageId>
-            5fea7756-0ea4-451a-a703-a558b933e274
-        </MessageId>
-    </SendMessageResult>
-    <ResponseMetadata>
-        <RequestId>
-            27daac76-34dd-47df-bd01-1f6e873584a0
-        </RequestId>
-    </ResponseMetadata>
-</SendMessageResponse>`, hash)
+	fmt.Fprintf(w, `<SendMessageResponse><SendMessageResult><MD5OfMessageBody>%x</MD5OfMessageBody><MD5OfMessageAttributes>3ae8f24a165a8cedc005670c81a27295</MD5OfMessageAttributes><MessageId>5fea7756-0ea4-451a-a703-a558b933e274</MessageId></SendMessageResult><ResponseMetadata><RequestId>27daac76-34dd-47df-bd01-1f6e873584a0</RequestId></ResponseMetadata></SendMessageResponse>`, hash)
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
